@@ -1,0 +1,273 @@
+---
+title: "Preparing data for Shiny App"
+author: "jbassard"
+date: "August 31st 2017"
+output:
+  html_document: default
+  pdf_document: default
+  self_contained: no
+---
+## Synopsis
+The code here is to cleanup data and combine labels of Event Types based on term similarity to improve readibility of the dataset on the Shiny App.
+
+Original Data are available online (https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2) as well as documentaion (https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2Fpd01016005curr.pdf) and FAQ (https://d396qusza40orc.cloudfront.net/repdata%2Fpeer2_doc%2FNCDC%20Storm%20Events-FAQ%20Page.pdf). 
+
+The data used for this assignment come in the form of a comma-separated-value file compressed via the bzip2 algorithm to reduce its size.The events in the database start in the year 1950 and end in November 2011. In the earlier years of the database there are generally fewer events recorded, most likely due to a lack of good records. More recent years should be considered more complete.
+
+### Checking for required packages and install them if necessary, then load them
+```{r}
+if (!require("knitr")) {
+	install.packages("knitr")}
+if (!require("R.utils")) {
+	install.packages("R.utils")} ##to have bunzip2 to unzip the original file
+if (!require("stringr")) {
+	install.packages("stringr")}
+if (!require("data.table")) {
+	install.packages("data.table")}
+if (!require("ggplot2")) {
+	install.packages("ggplot2")}
+
+library(knitr)
+library(R.utils)
+library(stringr)
+library(data.table)
+library(ggplot2)
+```
+### Setting the default of echo and cache to be True throughout the whole report
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache=TRUE)
+```
+## Data Processing
+### Checking if files exist in the folder "RepDataAssignment2" in default working directory, otherwise create the folder, download and unzip the dataset in that folder
+```{r}
+if(!file.exists("./PreparingData")) {
+	dir.create("./PreparingData")}
+if(!file.exists("./PreparingData/repdata%2Fdata%2FStormData.csv.bz2")) {
+	fileUrl <- "https://d396qusza40orc.cloudfront.net/repdata%2Fdata%2FStormData.csv.bz2"
+	download.file(fileUrl, destfile="./PreparingData/repdata%2Fdata%2FStormData.csv.bz2")}
+if(!file.exists("./PreparingData/stormdata.csv")) {
+	  bunzip2 ("./PreparingData/repdata%2Fdata%2FStormData.csv.bz2", overwrite=TRUE, remove=FALSE, destname="./PreparingData/stormdata.csv")}
+```
+### Loading the data
+```{r}
+StormData <- read.csv("./PreparingData/stormdata.csv", header=TRUE, stringsAsFactors=FALSE)
+```
+### Checking the raw data
+```{r}
+dim(StormData)
+head(StormData)
+str(StormData)
+
+```
+
+
+The data set StormData contains 902297 observations in 37 variables
+However we don't need all of them for our exploratory analysis to answer the questions regarding the impact of meteorological events on Humans.
+
+Therefore we'll limit our focus to the following columns:
+* STATE: The state where happened the storm
+* EVTYPE: The type of storm event
+* FATALITIES: The number of fatalities as a result of the storm event
+* INJURIES: The number of injuries as a result of the storm event
+* PROPDMG: The total property damage rounded to three significant digits
+* PROPDMGEXP: A letter code indicating the magnitude of the PROPDMG dollar amount {"K","M","B"} for "thousands", "millions" and "billions" respectively.
+* CROPDMG: The total crop damage rounded to three significant digits
+* CROPDMGEXP: A letter code indicating the magnitude of the CROPDMG dollar amount {"K","M","B"} for "thousands", "millions" and "billions" respectively.
+* REFNUM: A unique reference number for the event.
+
+### Preprocessing of the data
+```{r}
+TrimmedData <- StormData[,c("BGN_DATE", "STATE", "EVTYPE", "FATALITIES", "INJURIES", "PROPDMG", "PROPDMGEXP","CROPDMG", "CROPDMGEXP", "REFNUM")]
+TrimmedData$COUNT <- 1
+TrimmedData$YEAR <- year(strptime(TrimmedData$BGN_DATE, "%m/%d/%Y %H:%M:%S"))
+dim(TrimmedData)
+head(TrimmedData)
+str(TrimmedData)
+```
+
+### Are there missing values
+```{r}
+sum(is.na(TrimmedData))
+unique(TrimmedData$STATE)
+```
+There are no missing values.Nothing to do here. But there is several events did not assign to State names. I'll keep them for the moment.
+
+### Cleaning data
+```{r}
+eventtype <- sort(unique(TrimmedData$EVTYPE))
+eventtype[1:200]
+```
+
+The EVTYPE (event type)  variable contains duplicate categories based on mixed cases, therefore names will be converted in uppercases, then transformed in factor, to facilitate next data aggregations.
+
+```{r}
+TrimmedData$EVTYPE <- toupper(TrimmedData$EVTYPE)
+TrimmedData$EVTYPE <- as.factor(TrimmedData$EVTYPE)
+eventtype <- sort(unique(TrimmedData$EVTYPE))
+eventtype[1:200]
+```
+### Processing PROPDMGEXP and CROPDMGEXP
+Numbers of injuries or casualties are using letters for Millions, Billions.... We have to convert them in full figures.
+
+```{r}
+levels(TrimmedData$PROPDMGEXP)
+##  [1] ""  "-" "?" "+" "0" "1" "2" "3" "4" "5" "6" "7" "8" "B" "h" "H" "K"
+## [18] "m" "M"
+levels(TrimmedData$CROPDMGEXP)
+## [1] ""  "?" "0" "2" "B" "k" "K" "m" "M"
+
+
+fixnumbers <- function(x) {
+    return(as.numeric(ifelse(x == "", 0, ifelse(x == "K", "3", ifelse(x == "M", 
+        "6", ifelse(x == "B", "9", ifelse(x %in% c("", "-", "?", "+", "0", "H"), 
+            NA, as.character(x))))))))
+}
+
+TrimmedData$PROPDMGEXP <- fixnumbers(toupper(TrimmedData$PROPDMGEXP))
+TrimmedData$CROPDMGEXP <- fixnumbers(toupper(TrimmedData$CROPDMGEXP))
+
+TrimmedData$PROPDMG.TOTAL <- (TrimmedData$PROPDMG * 10^TrimmedData$PROPDMGEXP)/1e+06
+TrimmedData$CROPDMG.TOTAL <- (TrimmedData$CROPDMG * 10^TrimmedData$CROPDMGEXP)/1e+06
+```
+
+```{r}
+TrimmedData$EVTYPE <- toupper(gsub("(^\\s*)|(\\s*$)|((?<=\\s)\\s+)", "", TrimmedData$EVTYPE, perl = T)) ##remove leading, trailing and repeated whitspaces from events labels.
+exclude.list <- c("NONE", "?", "OTHER", "MARINE ACCIDENT", "WET MONTH", "WET YEAR", 
+    "APACHE COUNTY", "NO SEVERE WEATHER", "MONTHLY PRECIPITATION", "UNSEASONABLY WARM YEAR", 
+    "DROWNING", "SOUTHEAST", "EXCESSIVE", "HIGH", "MILD PATTERN", "NORTHERN LIGHTS", 
+    "RECORD TEMPERATURES", "RECORD TEMPERATURE", "SEVERE TURBULENCE", "MONTHLY TEMPERATURE", 
+    "TEMPERATURE RECORD")
+TrimmedData <- TrimmedData[!grepl("(^SUMMARY)|(SUMMARY$)", TrimmedData$EVTYPE) & !TrimmedData$EVTYPE %in% exclude.list,] ## remove of data not related to precise weather event 
+length(unique(TrimmedData$EVTYPE))
+```
+We have 795 types of event. There are a lot of events who are named nearly the same and which are the same event types as documented in the page 6 of the storm data documentation.
+So some of the data of the same types will be aggregated and few misspellings will be corrected.
+
+### Combining labels data based on name similarities
+```{r}
+TrimmedData$EVTYPE <- str_trim(TrimmedData$EVTYPE)
+
+thunderstorm.labels <- "(LIGHTNING)|(LIGHTING)|(LIGNTNING)|^(THUN?D?EE?RE?STORM)|(TSTMW)|(TSTM)|(THUNDERSTORMW)|(THUNDERTORM)|(THUNDERTSORM)|(THUNDERSTROM)|(TUNDERSTORM)|(SEVERE THUNDERSTORM)|(GUSTNADO)|(GUSTY THUNDERSTORM WINDS)|(^GUSTY THUNDERSTORM WIND$)|(^THUNDESTORM WINDS$)|(MICR?OBURST)|(^DOWNBURST)"
+TrimmedData[grepl(thunderstorm.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "THUNDERSTORM / THUNDERSTORM WIND / LIGHTNING" #Combining thunderstorm realated labels
+
+hail.labels <- "HAIL"
+TrimmedData[grepl(hail.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "HAIL" #Combining hail realated labels
+
+tornado.labels <- "(TORNADO)|(TORNDAO)|(WAY?TER\\s?SPOUT)|(FUNNEL)|(LANDSPOUT)|(WHIRLWIND)|(WALL CLOUD)" #Combining Tornado realated labels
+TrimmedData[grepl(tornado.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "TORNADO"
+
+fire.labels <- "(^((BRUSH)|(WILD)|(FOREST)|(GRASS)).*FIRES?$)|(^RED FLAG CRITERIA)|(^RED FLAG FIRE WX)"
+TrimmedData[grepl(fire.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "FIRE" #Combining fire realated labels
+
+surge.labels <- "SURGE"
+TrimmedData[grepl(surge.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "SURGE" #Combining surge realated labels
+
+coastal.labels <- "((COASTAL)|(CSTL)|(TIDAL)|(BEACH)).*((EROSION)|(FLOOD))|(ASTRONOMICAL.*TIDE)|(^HIGH TIDE)|(^BEACH EROSIN)|(^RAPIDLY RISING WATER)|(^RAPIDLY RISING WATER)|(^BLOW-OUT TIDE)"
+TrimmedData[grepl(coastal.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "COASTAL FLOOD OR EROSION / TIDE" #Combining coastal realated labels
+
+flood.labels <- "(FLASH.*FLOOD)|(FLOOD.*FLASH)|(^FLASH FLOOODING)|(^FLOOD((S)|(ING))?$)|(^LAKE(SHORE)? FLOOD$)|(^(ICE JAM)|(SNOWMELT)|(MAJOR)|(MINOR)|(RIVER( AND STREAM )?)|(RURAL) FLOOD(ING)?$)|(^FLOOD & HEAVY RAIN$)|(^HIGH WATER$)|(^SMA?L?L STREAM)|(^LOCAL FLOOD)|(^HIGHWAY FLOODING)|(^FLOOD WATCH)|(^BREAKUP FLOODING)|(^STREAM FLOODING)|(URBAN)|(^STREET FLOOD)"
+TrimmedData[grepl(flood.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "FLOOD" #Combining flood realated labels
+
+tropical.strom.labels <- "(TROPICAL STORM)|(HURRICANE)|(TYPHOON)|(TROPICAL DEPRESSION)|(^REMNANTS OF FLOYD)"
+TrimmedData[grepl(tropical.strom.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "TROPICAL STORM / HURRICANE / TYPHOON" #Combining tropical storm related labels
+
+ice.snow.labels <- "(SNOW)|(ICE)|(GLAZE)|(FREEZING DRIZZLE)|(FREEZE)|(FROST)|(HEAVY MIX)|(SLEET)|(ICY ROADS)|(MIXED PRECIPITATION)|(^MIXED PRECIP)|(^FREEZING SPRAY)|(AVALANCH?E)"
+TrimmedData[grepl(ice.snow.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "ICE / SNOW / FROST / AVALANCHE" #Combining snow and ice related labels
+
+dust.labels <- "DUST"
+TrimmedData[grepl(dust.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "DUST STORM" #Combining dust related labels
+
+cold.labels <- "(COLD)|(CHILL)|(COOL)|(LOW TEMPERATURE)|(HYPOTHERMIA)|(^UNSEASONAL LOW TEMP)|(^RECORD LOW$)"
+TrimmedData[grepl(cold.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "COLD" #Combining cold related labels
+
+wind.labels <- "(((GRADIENT)|(HIGH)|(GUSTY)|(STRONG)) WIND)|(^WINDS?$)|(^NON-SEVERE WIND DAMAGE$)|(^WIND DAMAGE$)|(^STORM FORCE WINDS$)|(^WND$)|(^WIND GUSTS)|(^WIND ADVISORY)|(^WIND STORM)|(^GUSTY LAKE WIND)|(^WAKE LOW WIND)"
+TrimmedData[grepl(wind.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "WIND" #Combining wind related labels
+
+rain.labels <- "(RAIN)|(HEAVY PRECIPITATION)|(HEAVY SHOWER)|(^METRO STORM, MAY 26)|(^HEAVY PRECIPATATION)|(^UNSEASONABLY WET)|(^EXCESSIVE PRECIPITATION)|(^NORMAL PRECIPITATION)|(^WET WEATHER)|(^EXCESSIVE WETNESS)|(^EXTREMELY WET)|(^RECORD PRECIPITATION)|(ABNORMALLY WET)"
+TrimmedData[grepl(rain.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "RAIN OR WET" #Combining rain and wet weather realated labels
+
+land.slide.labels <- "(MUD\\s?SLIDE)|(ROCK SLIDE)|(LANDSLUMP)|(LANDSLIDES?)"
+TrimmedData[grepl(land.slide.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "LANDSLIDE / MUDSLIDE / ROCK SLIDE" #Combining mudslide, rock slide and landslide realated labels
+
+fog.labels <- "FOG"
+TrimmedData[grepl(fog.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "FOG" #Combining fog realated labels
+
+blizzard.labels <- "(BLIZZARD)|(WINTER STORM)|(WINTER WEATHER)|(WINTRY MIX)|(^WINTER MIX)|(^WINTERY MIX)"
+TrimmedData[grepl(blizzard.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "BLIZZARD / WINTER STORM / WINTER WEATHER" #Combining blizzard realated labels
+
+heat.labels <- "(HEAT)|(RECORD WARMTH)|(HOT)|(WARM)|(^RECORD HIGH)|(HYPERTHERMIA)|(HIGH TEMPERATURE RECORD)"
+TrimmedData[grepl(heat.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "HEAT" #Combining heat realated labels
+
+dry.labels <- "(DROUGHT)|(DRY)|(DRIEST)|(^BELOW NORMAL PRECIPITATION)"
+TrimmedData[grepl(dry.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "DROUGHT" #Combining drougth realated labels
+
+volcanic.labels <- "(VOLCANIC ((ASH)|(ERUPTION)))"
+TrimmedData[grepl(volcanic.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "VOLCANIC ACTIVITY" #Combining volcanic activity realated labels
+
+marine.labels <- "(HIGH SEAS)|(SURF)|(RIP CURRENT)|(SWELLS)|(MARINE)|(HEAVY SEAS)|(^ROUGH SEAS)|(^HIGH WAVES)|(^WIND AND WAVE)|(^ROGUE WAVE)|(HIGH SURF)|(SEICHE)"
+TrimmedData[grepl(marine.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "MARINE WIND / SWELL / SURF" ##Combining diverse marine events labels
+
+smoke.labels <- "(VOG)|(SMOKE)"
+TrimmedData[grepl(smoke.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "VOG / SMOKE" #Combining smoke related labels
+
+dam.labels <- "(DAM)"
+TrimmedData[grepl(dam.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "DAM FAILURE" #Combining dam failure related labels
+
+coastalstorm.labels <- "(COASTAL\\s?STORM)"
+TrimmedData[grepl(coastalstorm.labels, TrimmedData$EVTYPE), ]$EVTYPE <- "COASTAL STORM" #Combining coastal storm labels
+
+TrimmedData$EVTYPE <- as.factor(TrimmedData$EVTYPE)
+length(unique(TrimmedData$EVTYPE))
+
+
+
+eventtype <- sort(unique(TrimmedData$EVTYPE))
+eventtype[1:50]
+print(paste("After initial data processing number of records have been reduced to", dim(TrimmedData)[1], "assigned to", length(unique(TrimmedData$EVTYPE)), "categories"))
+```
+### Converting 2 characters states' names in full names for map package in Shiny App
+```{r}
+unique(TrimmedData$STATE)
+```
+There is undefined States associateed to event, they are mentioned as "XX" in the database.
+
+```{r}
+stateFromLower <-function(x) {
+   st.codes<-data.frame(
+                      state=as.factor(c("AK", "AL", "AR", "AZ", "CA", "CO", "CT", "DC", "DE", "FL", "GA",
+                                         "HI", "IA", "ID", "IL", "IN", "KS", "KY", "LA", "MA", "MD", "ME",
+                                         "MI", "MN", "MO", "MS",  "MT", "NC", "ND", "NE", "NH", "NJ", "NM",
+                                         "NV", "NY", "OH", "OK", "OR", "PA", "PR", "RI", "SC", "SD", "TN",
+                                         "TX", "UT", "VA", "VT", "WA", "WI", "WV", "WY")),
+                      full=as.factor(c("alaska","alabama","arkansas","arizona","california","colorado",
+                                       "connecticut","district of columbia","delaware","florida","georgia",
+                                       "hawaii","iowa","idaho","illinois","indiana","kansas","kentucky",
+                                       "louisiana","massachusetts","maryland","maine","michigan","minnesota",
+                                       "missouri","mississippi","montana","north carolina","north dakota",
+                                       "nebraska","new hampshire","new jersey","new mexico","nevada",
+                                       "new york","ohio","oklahoma","oregon","pennsylvania","puerto rico",
+                                       "rhode island","south carolina","south dakota","tennessee","texas",
+                                       "utah","virginia","vermont","washington","wisconsin",
+                                       "west virginia","wyoming"))
+                       )
+                       st.x<-data.frame(state=x)
+                       refac.x<-st.codes$full[match(st.x$state,st.codes$state)]
+                       return(refac.x)
+}
+TrimmedData$STATE <- stateFromLower(TrimmedData$STATE)
+```
+
+### Saving data table for reuse with the Shiny App
+
+```{r}
+unique(TrimmedData$STATE)
+```
+
+```{r}
+TrimmedData <- TrimmedData[,c("YEAR", "STATE", "EVTYPE", "COUNT", "FATALITIES", "INJURIES", "PROPDMG.TOTAL", "CROPDMG.TOTAL")]
+
+if(!file.exists("./Data")) {
+	dir.create("./Data")}
+write.csv(TrimmedData, file = "./Data/events.csv")
+```
