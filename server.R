@@ -1,4 +1,5 @@
 # Server calculations coding for a Shiny web application.
+options(shiny.maxRequestSize=70*1024^2) # increase upload limit to 70Mo for the csv files to upload on the shiny server
 
 # Loading necessary packages
 if (!require("shiny")) {
@@ -50,7 +51,7 @@ library(maps)
 
 # Loading data
 states_map <- map_data("state")
-dt <- fread('./data/events.csv')
+dt <- fread('./events.csv')
 dt$EVTYPE <- tolower(dt$EVTYPE)
 evtypes <<- sort(unique(dt$EVTYPE))
 
